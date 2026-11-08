@@ -144,6 +144,18 @@ function geminiContents(image, messages, question) {
   return contents;
 }
 
+// ---- remember models Google says are busy or out of quota, so we skip them for a while (faster answers)
+const BUSY_URL = 'https://sbec-busy.cache/';
+async function isBusy(model) { try { return !!(await caches.default.match(BUSY_URL + encodeURIComponent(model))); } catch (e) { return false; } }
+async function markBusy(model, status) {
+  const secs = status === 429 ? 900 : 120;
+  try { await caches.default.put(BUSY_URL + encodeURIComponent(model), new Response('1', { headers: { 'cache-control': 'public, max-age=' + secs } })); } catch (e) {}
+}
+async function orderModels(models) {
+  const busy = await Promise.all(models.map(isBusy));
+  return { list: models.filter((m, i) => !busy[i]).concat(models.filter((m, i) => busy[i])), allBusy: busy.every(Boolean) };
+}
+
 async function callGemini(env, body, stream) {
   // Try the main model first; if Google says it is busy (or it is too slow), fall back to other Flash models.
   const base = env.GEMINI_BASE || GEMINI_BASE;
@@ -158,10 +170,11 @@ async function callGemini(env, body, stream) {
       return new Response(JSON.stringify({ error: { message: 'Gemini did not respond in time' } }), { status: 504 });
     } finally { clearTimeout(timer); }
   };
+  const order = (await orderModels(models)).list;
   let last = null;
-  for (let k = 0; k < models.length; k++) {
-    const model = models[k];
-    const ms = k === models.length - 1 ? 40000 : 20000;
+  for (let k = 0; k < order.length; k++) {
+    const model = order[k];
+    const ms = k === order.length - 1 ? 40000 : 15000;
     let res = await send(model, body, ms);
     if (res.status === 400 && body.generationConfig?.thinkingConfig) {
       // Older models don't accept thinkingLevel — retry without it.
@@ -171,6 +184,7 @@ async function callGemini(env, body, stream) {
     if (res.ok) return res;
     last = res;
     if (![404, 429, 500, 502, 503, 504].includes(res.status)) return res;
+    await markBusy(model, res.status);
     console.log('gemini busy, trying next model', model, res.status);
   }
   return last;
@@ -445,12 +459,14 @@ async function ttsStream(env, req, ctx) {
   const models = [...new Set([env.TTS_MODEL, 'gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'].filter(Boolean))];
   const body = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
   let lastStatus = 0;
-  for (const model of models) {
+  const ord = await orderModels(models);
+  if (ord.allBusy) return fail('Voice is busy right now. [429]', 503);
+  for (const model of ord.list) {
     const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 12000);
     let r;
     try { r = await fetch(`${base}${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: ac.signal }); }
     catch (e) { clearTimeout(tm); lastStatus = 504; continue; }
-    if (!r.ok || !r.body) { clearTimeout(tm); lastStatus = r.status; try { await r.text(); } catch (e) {} if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
+    if (!r.ok || !r.body) { clearTimeout(tm); lastStatus = r.status; try { await r.text(); } catch (e) {} if ([429, 500, 502, 503, 504].includes(r.status)) await markBusy(model, r.status); if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const t0 = Date.now();
@@ -505,13 +521,15 @@ async function tts(env, req, ctx) {
   const models = [...new Set([env.TTS_MODEL, 'gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'].filter(Boolean))];
   const body = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
   let lastStatus = 0, lastMsg = '';
-  for (const model of models) {
+  const ord = await orderModels(models);
+  if (ord.allBusy) return fail('Voice is busy right now. [429]', 503);
+  for (const model of ord.list) {
     const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 15000);
     let r;
     try { r = await fetch(`${base}${encodeURIComponent(model)}:generateContent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: ac.signal }); }
     catch (e) { lastStatus = 504; lastMsg = 'timeout'; continue; }
     finally { clearTimeout(tm); }
-    if (!r.ok) { lastStatus = r.status; lastMsg = (await r.text()).slice(0, 200); if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
+    if (!r.ok) { lastStatus = r.status; lastMsg = (await r.text()).slice(0, 200); if ([429, 500, 502, 503, 504].includes(r.status)) await markBusy(model, r.status); if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
     const j = await r.json();
     const part = (j.candidates?.[0]?.content?.parts || []).find(p => p.inlineData || p.inline_data);
     const inl = part && (part.inlineData || part.inline_data);

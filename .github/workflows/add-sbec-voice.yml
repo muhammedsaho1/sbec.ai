@@ -1,0 +1,75 @@
+# SBEC Voice — our own read-aloud engine that runs on each phone (no server, no limits, works offline).
+# This puts the engine files and the voice into the repo:
+#  - onnxruntime-web 1.22.0 and phonemizer 1.2.1 (from npm)
+#  - a Piper voice (from the official rhasspy/piper-voices on Hugging Face, checked against its checksum),
+#    split into pieces under 20 MB (GitHub and Cloudflare limits).
+# To change the voice: Actions -> Add SBEC Voice -> Run workflow, and type a voice name.
+name: Add SBEC Voice
+on:
+  workflow_dispatch:
+    inputs:
+      voice:
+        description: 'Piper voice name, e.g. en_US-hfc_female-medium'
+        default: 'en_US-hfc_female-medium'
+        required: true
+  push:
+    branches: [main]
+    paths: ['.github/workflows/add-sbec-voice.yml']
+permissions:
+  contents: write
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine files
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          curl -fsSL https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.22.0.tgz | tar xz -C "$T"
+          mkdir -p vendor/ort
+          cp "$T/package/dist/ort.wasm.min.mjs" "$T/package/dist/ort-wasm-simd-threaded.wasm" "$T/package/dist/ort-wasm-simd-threaded.mjs" vendor/ort/
+          cp "$T/package/LICENSE" vendor/ort/LICENSE
+          T2=$(mktemp -d)
+          curl -fsSL https://registry.npmjs.org/phonemizer/-/phonemizer-1.2.1.tgz | tar xz -C "$T2"
+          cp "$T2/package/dist/phonemizer.js" vendor/phonemizer.js
+          ls -la vendor vendor/ort
+      - name: Voice
+        env:
+          VOICE: ${{ github.event.inputs.voice || 'en_US-hfc_female-medium' }}
+        run: |
+          set -euo pipefail
+          LOC=${VOICE%%-*}; REST=${VOICE#*-}; SPK=${REST%-*}; Q=${REST##*-}; FAM=${LOC%%_*}
+          P="$FAM/$LOC/$SPK/$Q/$VOICE.onnx"
+          B=https://huggingface.co/rhasspy/piper-voices/resolve/main
+          OUT=voice/sbec; rm -rf "$OUT"; mkdir -p "$OUT"
+          curl -fsSL --retry 3 -o /tmp/model.onnx "$B/$P"
+          curl -fsSL --retry 3 -o "$OUT/voice.json" "$B/$P.json"
+          curl -fsSL "https://huggingface.co/api/models/rhasspy/piper-voices/tree/main/$FAM/$LOC/$SPK/$Q" > /tmp/tree.json
+          python3 - "$VOICE" "$P" <<'PY'
+          import json, hashlib, os, sys
+          voice, path = sys.argv[1], sys.argv[2]
+          data = open('/tmp/model.onnx', 'rb').read()
+          oid = next(e['lfs']['oid'] for e in json.load(open('/tmp/tree.json')) if e['path'] == path)
+          assert hashlib.sha256(data).hexdigest() == oid, 'voice checksum mismatch'
+          part = 16 * 1024 * 1024; parts = []
+          for i in range(0, len(data), part):
+              b = data[i:i + part]; name = 'model.part%d.bin' % (i // part)
+              open('voice/sbec/' + name, 'wb').write(b)
+              parts.append({'file': name, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest()})
+          json.dump({'voice': voice, 'source': 'rhasspy/piper-voices', 'size': len(data), 'sha256': oid, 'parts': parts},
+                    open('voice/sbec/manifest.json', 'w'), indent=1)
+          print(voice, len(data), len(parts), 'parts')
+          PY
+          ls -la "$OUT"
+      - name: Remove the old Heart voice files
+        run: rm -rf voice/kokoro tts-worker.js vendor/kokoro.web.js
+      - name: Commit
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A vendor voice tts-worker.js || true
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Add SBEC Voice engine and voice (${{ github.event.inputs.voice || 'en_US-hfc_female-medium' }})"
+          git push

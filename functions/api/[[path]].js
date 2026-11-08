@@ -148,7 +148,16 @@ async function callGemini(env, body, stream) {
   const model = env.GEMINI_MODEL || 'gemini-flash-latest';
   const base = env.GEMINI_BASE || GEMINI_BASE;
   const url = `${base}${encodeURIComponent(model)}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`;
-  const send = (b) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(b) });
+  const send = async (b) => {
+    // Give up if Gemini has not started answering within 40 seconds.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 40000);
+    try {
+      return await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(b), signal: ac.signal });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: { message: 'Gemini did not respond in time' } }), { status: 504 });
+    } finally { clearTimeout(timer); }
+  };
   let res = await send(body);
   if (res.status === 400 && body.generationConfig?.thinkingConfig) {
     // Older models don't accept thinkingLevel — retry without it.
@@ -159,10 +168,13 @@ async function callGemini(env, body, stream) {
 }
 
 function friendlyAiError(status, text) {
-  if (status === 429) return 'SBEC AI is very busy right now. Please try again in a minute.';
-  if (status === 400 && /image|inline|mime/i.test(text)) return 'That photo could not be read. Please try another photo.';
-  if (status === 403 || status === 401) return 'The AI key is not set up correctly. Please tell the administrator.';
-  return 'The AI could not answer right now. Please try again.';
+  let detail = '';
+  try { detail = (JSON.parse(text).error || {}).message || ''; } catch { detail = String(text || '').slice(0, 160); }
+  detail = ` [AI ${status}${detail ? ': ' + detail.slice(0, 180) : ''}]`;
+  if (status === 429) return 'SBEC AI is very busy right now. Please try again in a minute.' + detail;
+  if (status === 400 && /image|inline|mime/i.test(text)) return 'That photo could not be read. Please try another photo.' + detail;
+  if (status === 403 || status === 401) return 'The AI key is not set up correctly. Please tell the administrator.' + detail;
+  return 'The AI could not answer right now. Please try again.' + detail;
 }
 
 // ---------------------------------------------------------------- routes

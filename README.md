@@ -10,18 +10,17 @@ Bilingual SBEC International · Built by Saho Digital Services.
 |---|---|
 | `index.html` | The whole app: camera, explanations, read-aloud, quiz, sign-in and saved lessons |
 | `functions/api/[[path]].js` | Backend on Cloudflare: Gemini AI, voice (Gemini TTS), email sign-in codes and saved lessons (D1) |
-| `tts-worker.js` | Offline "Heart" voice (Kokoro-82M) that runs on the learner's phone |
-| `voice/kokoro/` | The offline voice files, split into pieces under 20 MB (GitHub and Cloudflare limits) |
-| `vendor/kokoro.web.js` | The offline voice engine (kokoro-js 1.2.0) |
-| `.github/workflows/add-voice.yml` | Re-downloads the offline voice from Hugging Face, checks it and splits it (Actions → Run workflow) |
+| `sbec-voice.js` | **SBEC Voice**: our own read-aloud engine that runs on each phone (no server, no limits, works offline) |
+| `voice/sbec/` | The voice (Piper, about 60 MB), split into pieces under 20 MB (GitHub and Cloudflare limits) |
+| `vendor/ort/`, `vendor/phonemizer.js` | Engine parts: ONNX Runtime Web 1.22.0 and phonemizer 1.2.1 |
+| `.github/workflows/add-sbec-voice.yml` | Puts the engine and voice in the repo. To change the voice: Actions → Add SBEC Voice → Run workflow |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Make it installable as an app |
 | `_headers` | Security and caching headers |
 
 ## How the voice works
 
-- **Online:** Google Gemini voice, streamed, so it starts in about 1 second.
-- **Offline voice:** the learner taps **Download** on the home screen (or it downloads by itself on Wi-Fi). It is about 90 MB, once. After that SBEC AI reads aloud even without internet.
-- If the phone is fast, it uses the offline voice all the time. If it's slow, it uses the Gemini voice online and the offline voice only when there is no internet.
+- **SBEC Voice (main):** the learner downloads it once, either by tapping **Download** or automatically after adding the app to the home screen. After that, every phone makes its own speech: no server, no limits for any number of users, and it works offline.
+- **Before the download, or on very slow phones:** the Google Gemini voice reads aloud online. If Google is busy, the phone's own voice takes over.
 
 ## Cloudflare settings
 

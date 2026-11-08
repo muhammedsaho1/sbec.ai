@@ -51,6 +51,13 @@ img{max-width:100%}
 .pillbtn svg{width:18px;height:18px;flex:none}
 
 /* home */
+#installBtn svg{width:16px;height:16px}
+.isteps{margin:10px 0 4px 22px;padding:0;font-size:15.5px;line-height:1.5}
+.isteps li{margin:10px 0}
+.ishare{width:18px;height:18px;vertical-align:-3px;color:var(--primary)}
+.inote{color:var(--muted);font-size:13.5px;margin:8px 0 0}
+.iarrow{position:fixed;left:50%;bottom:6px;font-size:40px;line-height:1;color:#fff;font-weight:800;text-shadow:0 2px 10px rgba(0,0,0,.6);animation:ibounce 1s ease-in-out infinite;pointer-events:none;z-index:9999}
+@keyframes ibounce{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,10px)}}
 #installCard .ovt,#offVoice .ovt{flex:1;min-width:0}
 #installCard .ovbtn,#offVoice .ovbtn{flex:none;align-self:center;border:0;background:var(--primary);color:#fff;font:inherit;font-weight:700;font-size:14px;border-radius:12px;padding:9px 14px;cursor:pointer}
 #offVoice .ovbar{display:block;height:6px;border-radius:6px;background:rgba(127,127,127,.22);margin:6px 0 4px;overflow:hidden}
@@ -204,6 +211,7 @@ textarea:focus,.field:focus{border-color:var(--primary)}
     <button class="iconbtn hidden" id="backBtn" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
     <div class="brand"><img src="/icons/icon-192.png?v=2" alt=""><span class="t" id="brandTitle">SBEC AI</span></div>
     <button class="iconbtn" id="voiceBtn" aria-label="Voice on/off" title="Voice on/off"></button>
+    <button class="pillbtn hidden" id="installBtn" aria-label="Install the app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>Install</span></button>
     <button class="pillbtn" id="acctBtn"></button>
   </div>
 </header>
@@ -412,30 +420,58 @@ class SentenceFeeder {
 }
 
 /* ---------------- add to home screen ---------------- */
-// Once SBEC AI is on the home screen, it downloads the offline voice by itself.
+// "Install" button in the top bar and on the home screen. Android: the real install prompt.
+// iPhone/iPad: Apple doesn't let websites add themselves, so we show the 3 quick steps.
+// Once installed, SBEC AI gets SBEC Voice ready by itself.
 const Install = {
   evt: null,
+  ua: navigator.userAgent,
   installed() { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; },
-  ios() { return /iphone|ipad|ipod/i.test(navigator.userAgent); },
+  ios() { return /iphone|ipad|ipod/i.test(this.ua) || (/Macintosh/.test(this.ua) && navigator.maxTouchPoints > 1); },
+  iphone() { return /iphone|ipod/i.test(this.ua); },
+  safari() { return this.ios() && !/crios|fxios|edgios|opios|gsa\//i.test(this.ua); },
+  android() { return /android/i.test(this.ua); },
+  can() { return !this.installed() && (!!this.evt || this.ios() || this.android()); },
   render() {
+    const can = this.can();
+    const hb = $('#installBtn'); if (hb) hb.classList.toggle('hidden', !can);
     const el = $('#installCard'); if (!el) return;
-    if (this.installed() || (!this.evt && !this.ios())) { el.classList.add('hidden'); return; }
+    if (!can) { el.classList.add('hidden'); return; }
     const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></svg></div>';
-    const txt = this.evt ? 'Open it like a normal app. It also gets SBEC Voice ready for you.'
-      : 'Tap the Share button, then “Add to Home Screen”. It also gets SBEC Voice ready for you.';
-    el.innerHTML = ic + `<div class="ovt"><b>Add SBEC AI to your home screen</b><span>${txt}</span></div>` + (this.evt ? '<button class="ovbtn">Add</button>' : '');
+    el.innerHTML = ic + '<div class="ovt"><b>Install the SBEC AI app</b><span>Opens like a normal app from your home screen, and gets SBEC Voice ready for you.</span></div><button class="ovbtn">Install</button>';
     el.classList.remove('hidden');
-    const b = el.querySelector('.ovbtn');
-    if (b) b.onclick = async () => {
-      const e = this.evt; if (!e) return; this.evt = null;
+    el.querySelector('.ovbtn').onclick = () => this.go();
+  },
+  async go() {
+    if (this.evt) {
+      const e = this.evt; this.evt = null;
       e.prompt();
       try { const r = await e.userChoice; if (r && r.outcome === 'accepted') Kok.onInstalled(); } catch {}
-      this.render();
-    };
+      this.render(); return;
+    }
+    this.help();
+  },
+  help() {
+    const share = '<svg class="ishare" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8"/></svg>';
+    let steps;
+    if (this.ios()) {
+      const where = this.safari() ? (this.iphone() ? 'at the bottom of the screen (or tap <b>•••</b> first)' : 'at the top of the screen') : 'next to the address bar';
+      steps = [`Tap the <b>Share</b> button ${share} ${where}`, 'Scroll down and tap <b>Add to Home Screen</b>', 'Tap <b>Add</b>. Done!'];
+    } else {
+      steps = ['Tap the browser menu <b>⋮</b> (top right)', 'Tap <b>Install app</b> or <b>Add to Home screen</b>', 'Tap <b>Install</b>. Done!'];
+    }
+    const ov = document.createElement('div'); ov.className = 'overlay';
+    ov.innerHTML = `<div class="sheet"><div class="grab"></div><h3>Install SBEC AI</h3><ol class="isteps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol><p class="inote">Then open SBEC AI from your home screen. It gets SBEC Voice ready by itself.</p><div class="row"><button class="btn" id="iOk">Got it</button></div></div>` +
+      (this.iphone() && this.safari() ? '<div class="iarrow" aria-hidden="true">↓</div>' : '');
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+    $('#iOk', ov).onclick = close;
   },
   init() {
     window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); this.evt = e; this.render(); });
     window.addEventListener('appinstalled', () => { this.evt = null; this.render(); Kok.onInstalled(); });
+    const hb = $('#installBtn'); if (hb) hb.onclick = () => this.go();
     this.render();
   },
 };

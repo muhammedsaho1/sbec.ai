@@ -419,6 +419,54 @@ async function deleteSnap(env, user, id) {
   return ok({ deleted: true });
 }
 
+// ---------------------------------------------------------------- read-aloud voice (Google Gemini TTS)
+function pcmToWav(pcm, rate) {
+  const h = new ArrayBuffer(44); const v = new DataView(h);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + pcm.length, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, pcm.length, true);
+  const out = new Uint8Array(44 + pcm.length); out.set(new Uint8Array(h), 0); out.set(pcm, 44); return out;
+}
+async function tts(env, req, ctx) {
+  if (!env.GEMINI_API_KEY) return fail('Voice is not configured.', 500);
+  const b = await readJson(req);
+  const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 700);
+  if (!text) return fail('Nothing to read.');
+  const voice = env.TTS_VOICE || 'Sulafat';
+  // Same sentence read again? Serve it from Cloudflare's cache instantly.
+  const cacheKey = new Request('https://sbec-tts.cache/' + await sha256(voice + '|' + text));
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  if (!(await takeQuota(env, 'tts:' + clientIp(req), parseInt(env.TTS_DAILY || '800')))) return fail('Voice limit reached for today.', 429);
+  const base = env.GEMINI_BASE || GEMINI_BASE;
+  const models = [...new Set([env.TTS_MODEL, 'gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'].filter(Boolean))];
+  const body = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
+  let lastStatus = 0, lastMsg = '';
+  for (const model of models) {
+    const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 15000);
+    let r;
+    try { r = await fetch(`${base}${encodeURIComponent(model)}:generateContent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: ac.signal }); }
+    catch (e) { lastStatus = 504; lastMsg = 'timeout'; continue; }
+    finally { clearTimeout(tm); }
+    if (!r.ok) { lastStatus = r.status; lastMsg = (await r.text()).slice(0, 200); if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
+    const j = await r.json();
+    const part = (j.candidates?.[0]?.content?.parts || []).find(p => p.inlineData || p.inline_data);
+    const inl = part && (part.inlineData || part.inline_data);
+    if (!inl || !inl.data) { lastStatus = 502; lastMsg = 'no audio'; continue; }
+    const rate = parseInt((/rate=(\d+)/.exec(inl.mimeType || inl.mime_type || '') || [])[1] || '24000');
+    const bin = atob(inl.data); const pcm = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) pcm[i] = bin.charCodeAt(i);
+    const res = new Response(pcmToWav(pcm, rate), { headers: { 'content-type': 'audio/wav', 'cache-control': 'public, max-age=2592000', 'x-tts-model': model } });
+    ctx.waitUntil(cache.put(cacheKey, res.clone()));
+    return res;
+  }
+  console.log('tts failed', lastStatus, lastMsg);
+  return fail('Voice is busy right now. [' + lastStatus + ']', 502);
+}
+
 // ---------------------------------------------------------------- entry
 export async function onRequest(ctx) {
   const req = ctx.request;
@@ -484,6 +532,7 @@ export async function onRequest(ctx) {
     await ensureSchema(env.DB);
     if (path === 'explain' && method === 'POST') return await explain(env, req, ctx);
     if (path === 'quiz' && method === 'POST') return await quiz(env, req);
+    if (path === 'tts' && method === 'POST') return await tts(env, req, ctx);
     if (path === 'auth/start' && method === 'POST') return await authStart(env, req);
     if (path === 'auth/verify' && method === 'POST') return await authVerify(env, req);
     if (path === 'auth/logout' && method === 'POST') return await logout(env, req);

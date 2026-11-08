@@ -433,8 +433,25 @@ export async function onRequest(ctx) {
       } catch (e) { out.tests.push({ label, status: 'timeout/error', ms: Date.now() - t0, msg: String(e && e.message || e) }); }
       finally { clearTimeout(tm); }
     };
-    await tryCall('plain', { contents: [{ role: 'user', parts: [{ text: 'Say hi in 3 words.' }] }] });
-    await tryCall('thinking-low', { contents: [{ role: 'user', parts: [{ text: 'Say hi in 3 words.' }] }], generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } });
+    const hi = [{ role: 'user', parts: [{ text: 'Say hi in 3 words.' }] }];
+    const which = (url.searchParams.get('t') || 'plain,low,max,sys,schema,stream').split(',');
+    if (which.includes('plain')) await tryCall('plain', { contents: hi });
+    if (which.includes('low')) await tryCall('thinking-low', { contents: hi, generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } });
+    if (which.includes('max')) await tryCall('maxTokens', { contents: hi, generationConfig: { maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'low' } } });
+    if (which.includes('sys')) await tryCall('system', { system_instruction: { parts: [{ text: systemPrompt('kid') }] }, contents: hi, generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } });
+    if (which.includes('schema')) await tryCall('schema', { contents: hi, generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', properties: { reply: { type: 'STRING' } }, required: ['reply'] } } });
+    if (which.includes('stream')) {
+      const t0 = Date.now(); const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 25000);
+      try {
+        const r = await fetch(`${base}${encodeURIComponent(out.model)}:streamGenerateContent?alt=sse`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify({ contents: hi, generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } }), signal: ac.signal });
+        const headersMs = Date.now() - t0;
+        const rd = r.body.getReader(); const first = await rd.read(); const firstMs = Date.now() - t0;
+        let txt = new TextDecoder().decode(first.value || new Uint8Array());
+        try { await rd.cancel(); } catch {}
+        out.tests.push({ label: 'stream', status: r.status, headersMs, firstMs, msg: txt.slice(0, 160) });
+      } catch (e) { out.tests.push({ label: 'stream', status: 'timeout/error', ms: Date.now() - t0, msg: String(e && e.message || e) }); }
+      finally { clearTimeout(tm); }
+    }
     try {
       const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
       const j = await r.json(); out.listStatus = r.status;

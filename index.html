@@ -51,8 +51,8 @@ img{max-width:100%}
 .pillbtn svg{width:18px;height:18px;flex:none}
 
 /* home */
-#offVoice .ovt{flex:1;min-width:0}
-#offVoice .ovbtn{flex:none;align-self:center;border:0;background:var(--primary);color:#fff;font:inherit;font-weight:700;font-size:14px;border-radius:12px;padding:9px 14px;cursor:pointer}
+#installCard .ovt,#offVoice .ovt{flex:1;min-width:0}
+#installCard .ovbtn,#offVoice .ovbtn{flex:none;align-self:center;border:0;background:var(--primary);color:#fff;font:inherit;font-weight:700;font-size:14px;border-radius:12px;padding:9px 14px;cursor:pointer}
 #offVoice .ovbar{display:block;height:6px;border-radius:6px;background:rgba(127,127,127,.22);margin:6px 0 4px;overflow:hidden}
 #offVoice .ovbar i{display:block;height:100%;background:var(--primary);transition:width .3s}
 .school{display:flex;align-items:center;gap:14px;background:var(--surface);border-radius:20px;padding:10px 16px 10px 10px;box-shadow:var(--shadow);margin-top:14px}
@@ -228,6 +228,8 @@ textarea:focus,.field:focus{border-color:var(--primary)}
     <button data-level="student">Student<small>clear &amp; full</small></button>
     <button data-level="advanced">Advanced<small>in depth</small></button>
   </div>
+
+  <div id="installCard" class="card promo hidden"></div>
 
   <div id="offVoice" class="card promo"></div>
 
@@ -409,6 +411,35 @@ class SentenceFeeder {
   emit(seg) { const c = cleanForSpeech(seg); if (c) chunkLong(c).forEach(x => this.on(x)); }
 }
 
+/* ---------------- add to home screen ---------------- */
+// Once SBEC AI is on the home screen, it downloads the offline voice by itself.
+const Install = {
+  evt: null,
+  installed() { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; },
+  ios() { return /iphone|ipad|ipod/i.test(navigator.userAgent); },
+  render() {
+    const el = $('#installCard'); if (!el) return;
+    if (this.installed() || (!this.evt && !this.ios())) { el.classList.add('hidden'); return; }
+    const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></svg></div>';
+    const txt = this.evt ? 'Open it like a normal app. It also gets the offline voice ready for you.'
+      : 'Tap the Share button, then “Add to Home Screen”. It also gets the offline voice ready for you.';
+    el.innerHTML = ic + `<div class="ovt"><b>Add SBEC AI to your home screen</b><span>${txt}</span></div>` + (this.evt ? '<button class="ovbtn">Add</button>' : '');
+    el.classList.remove('hidden');
+    const b = el.querySelector('.ovbtn');
+    if (b) b.onclick = async () => {
+      const e = this.evt; if (!e) return; this.evt = null;
+      e.prompt();
+      try { const r = await e.userChoice; if (r && r.outcome === 'accepted') Kok.onInstalled(); } catch {}
+      this.render();
+    };
+  },
+  init() {
+    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); this.evt = e; this.render(); });
+    window.addEventListener('appinstalled', () => { this.evt = null; this.render(); Kok.onInstalled(); });
+    this.render();
+  },
+};
+
 /* ---------------- offline voice (the "Heart" voice, kept on the phone) ---------------- */
 // Until it is downloaded, the fast Google voice reads aloud. After the download (Wi-Fi, or when the
 // learner taps Download), the Heart voice runs on the phone itself, even without internet.
@@ -443,6 +474,7 @@ const Kok = {
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
     this.state = 'downloading'; this.pct = 0; this.render(); this.start(true);
   },
+  onInstalled() { if (this.state === 'none' || this.state === 'error') this.download(); },
   ready() { return this.state === 'ready' && !!this.w; },
   // Use the Heart voice when the phone makes speech fast enough, and always when there is no internet.
   usable() { return this.ready() && (!navigator.onLine || this.speed >= 1.5); },
@@ -466,6 +498,7 @@ const Kok = {
   init() {
     this.render();
     if (this.state === 'saved') { this.start(false); return; }
+    if (Install.installed()) { setTimeout(() => this.onInstalled(), 2500); return; }
     const c = navigator.connection;
     if (c && c.type === 'wifi' && !c.saveData) setTimeout(() => { if (this.state === 'none') this.download(); }, 4000);
   },
@@ -1039,7 +1072,7 @@ window.addEventListener('scroll', () => $('#top').classList.toggle('scrolled', w
 window.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])].find(f => /^image\//.test(f.type)); if (f) startLessonFromFile(f); });
 
 UI.voiceBtn(); UI.acct(); UI.levels(); UI.show('home');
-Kok.init();
+Install.init(); Kok.init();
 if (state.token) {
   api('me').then(r => { if (!r.user) signOutLocal(); else { state.email = r.user.email; store.set('email', r.user.email); UI.acct(); loadHistory(); } }).catch(() => loadHistory());
 }

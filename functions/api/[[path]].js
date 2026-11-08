@@ -15,7 +15,7 @@
 //    DELETE snaps/:id        delete one saved lesson
 //
 //  Cloudflare settings needed (Pages > Settings):
-//    D1 binding        DB              (any D1 database — tables are created automatically)
+//    D1 binding        SBEC_DB         (any D1 database — tables are created automatically)
 //    Secret            GEMINI_API_KEY  (Google AI Studio key)
 //    Secret            BREVO_API_KEY   (sends the sign-in code emails)
 //    Variable          EMAIL_FROM      (a sender address verified in Brevo)
@@ -400,7 +400,9 @@ async function deleteSnap(env, user, id) {
 
 // ---------------------------------------------------------------- entry
 export async function onRequest(ctx) {
-  const { request: req, env } = ctx;
+  const req = ctx.request;
+  // The D1 database binding is called SBEC_DB (DB is kept as a fallback name).
+  const env = Object.assign({}, ctx.env, ctx.env.SBEC_DB ? { DB: ctx.env.SBEC_DB } : {});
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api\/?/, '').replace(/\/+$/, '');
   const method = req.method.toUpperCase();

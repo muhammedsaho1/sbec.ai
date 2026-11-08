@@ -147,7 +147,7 @@ function geminiContents(image, messages, question) {
 async function callGemini(env, body, stream) {
   // Try the main model first; if Google says it is busy (or it is too slow), fall back to other Flash models.
   const base = env.GEMINI_BASE || GEMINI_BASE;
-  const models = [...new Set([env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'].filter(Boolean))];
+  const models = [...new Set([env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest', 'gemini-3.5-flash-lite'].filter(Boolean))];
   const send = async (model, b, ms) => {
     const url = `${base}${encodeURIComponent(model)}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`;
     const ac = new AbortController();
@@ -170,7 +170,7 @@ async function callGemini(env, body, stream) {
     }
     if (res.ok) return res;
     last = res;
-    if (![429, 500, 502, 503, 504].includes(res.status)) return res;
+    if (![404, 429, 500, 502, 503, 504].includes(res.status)) return res;
     console.log('gemini busy, trying next model', model, res.status);
   }
   return last;

@@ -29,7 +29,7 @@ jobs:
           curl -fsSL https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.22.0.tgz | tar xz -C "$T"
           mkdir -p vendor/ort
           cp "$T/package/dist/ort.wasm.min.mjs" "$T/package/dist/ort-wasm-simd-threaded.wasm" "$T/package/dist/ort-wasm-simd-threaded.mjs" vendor/ort/
-          cp "$T/package/LICENSE" vendor/ort/LICENSE
+          cp "$T/package/README.md" vendor/ort/README.md
           T2=$(mktemp -d)
           curl -fsSL https://registry.npmjs.org/phonemizer/-/phonemizer-1.2.1.tgz | tar xz -C "$T2"
           cp "$T2/package/dist/phonemizer.js" vendor/phonemizer.js

@@ -405,7 +405,16 @@ export async function onRequest(ctx) {
   const path = url.pathname.replace(/^\/api\/?/, '').replace(/\/+$/, '');
   const method = req.method.toUpperCase();
   if (method === 'OPTIONS') return new Response(null, { status: 204 });
+  if (path === 'health') {
+    const db = env.DB && typeof env.DB.prepare === 'function';
+    let dbOk = false, dbError = null;
+    if (db) { try { await ensureSchema(env.DB); dbOk = true; } catch (e) { dbError = String(e && e.message || e); } }
+    return ok({ ok: dbOk && !!env.GEMINI_API_KEY, ai: !!env.GEMINI_API_KEY, email: !!(env.BREVO_API_KEY && env.EMAIL_FROM),
+      database: db ? (dbOk ? 'connected' : 'error') : (env.DB ? 'DB is set as a text variable — it must be a D1 binding' : 'missing — add a D1 binding named DB'),
+      dbError });
+  }
   if (!env.DB) return fail('Database is not connected (add a D1 binding named DB).', 500);
+  if (typeof env.DB.prepare !== 'function') return fail('DB must be a D1 database binding (Settings > Bindings), not a text variable.', 500);
 
   try {
     await ensureSchema(env.DB);
@@ -414,7 +423,6 @@ export async function onRequest(ctx) {
     if (path === 'auth/start' && method === 'POST') return await authStart(env, req);
     if (path === 'auth/verify' && method === 'POST') return await authVerify(env, req);
     if (path === 'auth/logout' && method === 'POST') return await logout(env, req);
-    if (path === 'health') return ok({ ok: true, ai: !!env.GEMINI_API_KEY, email: !!(env.BREVO_API_KEY && env.EMAIL_FROM) });
 
     const user = await currentUser(env, req);
     if (path === 'me') return ok({ user: user ? { email: user.email } : null });
@@ -427,6 +435,6 @@ export async function onRequest(ctx) {
     return fail('Not found.', 404);
   } catch (e) {
     console.log('api error', path, e && e.stack || e);
-    return fail('Something went wrong. Please try again.', 500);
+    return fail('Something went wrong: ' + String(e && e.message || e).slice(0, 200), 500);
   }
 }

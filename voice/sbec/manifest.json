@@ -1,0 +1,28 @@
+{
+ "voice": "en_US-hfc_female-medium",
+ "source": "rhasspy/piper-voices",
+ "size": 63201294,
+ "sha256": "914c473788fc1fa8b63ace1cdcdb44588f4ae523d3ab37df1536616835a140b7",
+ "parts": [
+  {
+   "file": "model.part0.bin",
+   "size": 16777216,
+   "sha256": "00a5d28aa7cfb1c148710e301003b84edea9d2bfed99d1baa9394a13f27d9a63"
+  },
+  {
+   "file": "model.part1.bin",
+   "size": 16777216,
+   "sha256": "71ddedcab14ee280c557ba86532e727ee3a6977f6a2d266ebad8415df1c0c5d4"
+  },
+  {
+   "file": "model.part2.bin",
+   "size": 16777216,
+   "sha256": "35e9bfc9837b4721681be38f72b8891024d83cbd51386b082a7ed89aa19842f4"
+  },
+  {
+   "file": "model.part3.bin",
+   "size": 12869646,
+   "sha256": "0dd627b4d116c87028c11ded0a355907a78940299efcf738af1e6caa58b83502"
+  }
+ ]
+}

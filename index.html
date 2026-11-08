@@ -460,7 +460,13 @@ const Kok = {
       const m = ev.data || {};
       if (m.type === 'progress') { if (m.pct < 100) { this.state = 'downloading'; this.pct = m.pct; this.render(); } }
       else if (m.type === 'preparing') { store.set('kokoro', 'ok'); if (this.state !== 'saved') { this.state = 'preparing'; this.render(); } }
-      else if (m.type === 'ready') { this.state = 'ready'; this.speed = m.speed || 0; store.set('kokoro', 'ok'); this.render(); }
+      else if (m.type === 'ready') {
+        this.speed = m.speed || 0; store.set('kokoro', 'ok');
+        // Not needed right now: free the phone's memory. It loads again when needed.
+        if (navigator.onLine && !(Voice.ttsDownUntil > Date.now())) { try { this.w.terminate(); } catch {} this.w = null; this.failAll(); this.state = 'saved'; }
+        else this.state = 'ready';
+        this.render();
+      }
       else if (m.type === 'error') fail(m.message);
       else if (m.type === 'audio' || m.type === 'fail') {
         const p = this.wait.get(m.id); if (!p) return; this.wait.delete(m.id);
@@ -476,10 +482,17 @@ const Kok = {
   },
   onInstalled() { if (this.state === 'none' || this.state === 'error') this.download(); },
   ready() { return this.state === 'ready' && !!this.w; },
-  // Use the Heart voice when the phone makes speech fast enough, and always when there is no internet.
-  usable() { return this.ready() && (!navigator.onLine || this.speed >= 1.5); },
+  // Load the Heart voice only when it's needed (no internet, or the online voice is busy).
+  wake() { if (this.state === 'saved' && !this.w) this.start(false); },
+  // Online, the fast Google voice reads. The Heart voice takes over when there's no internet or Google is busy.
+  usable() { return this.ready() && this.speed >= 0.7 && (!navigator.onLine || Voice.ttsDownUntil > Date.now()); },
   speak(text) {
-    return new Promise((res, rej) => { const id = ++this.n; this.wait.set(id, { res, rej }); this.w.postMessage({ type: 'speak', id, text }); });
+    return new Promise((res, rej) => {
+      const id = ++this.n;
+      const t = setTimeout(() => { if (this.wait.delete(id)) rej(new Error('too slow')); }, 5000 + text.length * 150);
+      this.wait.set(id, { res: (v) => { clearTimeout(t); res(v); }, rej: (e) => { clearTimeout(t); rej(e); } });
+      this.w.postMessage({ type: 'speak', id, text });
+    });
   },
   clear() { if (this.w) this.w.postMessage({ type: 'clear' }); this.failAll(); },
   failAll() { for (const p of this.wait.values()) p.rej(new Error('stopped')); this.wait.clear(); },
@@ -488,8 +501,8 @@ const Kok = {
     const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2zM3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg></div>';
     let body;
     if (this.state === 'downloading') body = `<div class="ovt"><b>Downloading offline voice… ${this.pct}%</b><span class="ovbar"><i style="width:${this.pct}%"></i></span><span>Keep using the app. The voice reads aloud meanwhile.</span></div>`;
-    else if (this.state === 'preparing' || this.state === 'saved') body = '<div class="ovt"><b>Offline voice</b><span>Getting it ready…</span></div>';
-    else if (this.state === 'ready') body = '<div class="ovt"><b>Offline voice ready</b><span>SBEC AI can read aloud even without internet.</span></div>';
+    else if (this.state === 'preparing') body = '<div class="ovt"><b>Offline voice</b><span>Getting it ready…</span></div>';
+    else if (this.state === 'ready' || this.state === 'saved') body = '<div class="ovt"><b>Offline voice ready</b><span>SBEC AI can read aloud even without internet.</span></div>';
     else if (this.state === 'error') body = '<div class="ovt"><b>Offline voice</b><span>The download stopped. Check your internet and try again.</span></div><button class="ovbtn">Try again</button>';
     else body = '<div class="ovt"><b>Offline voice</b><span>Download once (about 90 MB, best on Wi-Fi) so SBEC AI reads aloud even without internet.</span></div><button class="ovbtn">Download</button>';
     el.innerHTML = ic + body;
@@ -497,7 +510,8 @@ const Kok = {
   },
   init() {
     this.render();
-    if (this.state === 'saved') { this.start(false); return; }
+    window.addEventListener('offline', () => this.wake());
+    if (this.state === 'saved') return;
     if (Install.installed()) { setTimeout(() => this.onInstalled(), 2500); return; }
     const c = navigator.connection;
     if (c && c.type === 'wifi' && !c.saveData) setTimeout(() => { if (this.state === 'none') this.download(); }, 4000);
@@ -522,6 +536,7 @@ const Voice = {
   speakingMsg: null,
   paused: false,
   cur: null,
+  ttsDownUntil: 0,
 
   unlock() {
     try {
@@ -572,8 +587,9 @@ const Voice = {
       }
     }
     try {
+      if (this.ttsDownUntil > Date.now()) throw new Error('voice server busy');
       const r = await fetch('/api/tts-stream', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: job.text }) });
-      if (!r.ok) throw new Error('tts ' + r.status);
+      if (!r.ok) { if (r.status >= 429) { this.ttsDownUntil = Date.now() + 300000; Kok.wake(); } throw new Error('tts ' + r.status); }
       if (gen !== this.gen) return;
       this.unlock();
       const type = r.headers.get('content-type') || '';

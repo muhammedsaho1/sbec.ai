@@ -51,6 +51,10 @@ img{max-width:100%}
 .pillbtn svg{width:18px;height:18px;flex:none}
 
 /* home */
+#offVoice .ovt{flex:1;min-width:0}
+#offVoice .ovbtn{flex:none;align-self:center;border:0;background:var(--primary);color:#fff;font:inherit;font-weight:700;font-size:14px;border-radius:12px;padding:9px 14px;cursor:pointer}
+#offVoice .ovbar{display:block;height:6px;border-radius:6px;background:rgba(127,127,127,.22);margin:6px 0 4px;overflow:hidden}
+#offVoice .ovbar i{display:block;height:100%;background:var(--primary);transition:width .3s}
 .school{display:flex;align-items:center;gap:14px;background:var(--surface);border-radius:20px;padding:10px 16px 10px 10px;box-shadow:var(--shadow);margin-top:14px}
 .school img{width:92px;height:auto;border-radius:12px;background:#fff;flex:none}
 .school b{display:block;font-size:16px;line-height:1.25;color:var(--primary2)}
@@ -224,6 +228,8 @@ textarea:focus,.field:focus{border-color:var(--primary)}
     <button data-level="student">Student<small>clear &amp; full</small></button>
     <button data-level="advanced">Advanced<small>in depth</small></button>
   </div>
+
+  <div id="offVoice" class="card promo"></div>
 
   <div id="guestPromo" class="card promo">
     <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v17l-7-4-7 4z"/></svg></div>
@@ -403,6 +409,68 @@ class SentenceFeeder {
   emit(seg) { const c = cleanForSpeech(seg); if (c) chunkLong(c).forEach(x => this.on(x)); }
 }
 
+/* ---------------- offline voice (the "Heart" voice, kept on the phone) ---------------- */
+// Until it is downloaded, the fast Google voice reads aloud. After the download (Wi-Fi, or when the
+// learner taps Download), the Heart voice runs on the phone itself, even without internet.
+const Kok = {
+  state: store.get('kokoro', '') === 'ok' ? 'saved' : 'none', // none | downloading | preparing | ready | error | saved
+  pct: 0, speed: 0, w: null, n: 0, wait: new Map(),
+  start(download) {
+    if (this.w) { if (download) this.w.postMessage({ type: 'load', download: true }); return; }
+    try { this.w = new Worker('/tts-worker.js', { type: 'module' }); }
+    catch (e) { this.state = 'error'; this.render(); return; }
+    const fail = (msg) => {
+      try { this.w.terminate(); } catch {}
+      this.w = null; this.failAll();
+      if (msg === 'missing') { store.set('kokoro', ''); this.state = 'none'; } else this.state = 'error';
+      this.render();
+    };
+    this.w.onmessage = (ev) => {
+      const m = ev.data || {};
+      if (m.type === 'progress') { if (m.pct < 100) { this.state = 'downloading'; this.pct = m.pct; this.render(); } }
+      else if (m.type === 'preparing') { store.set('kokoro', 'ok'); if (this.state !== 'saved') { this.state = 'preparing'; this.render(); } }
+      else if (m.type === 'ready') { this.state = 'ready'; this.speed = m.speed || 0; store.set('kokoro', 'ok'); this.render(); }
+      else if (m.type === 'error') fail(m.message);
+      else if (m.type === 'audio' || m.type === 'fail') {
+        const p = this.wait.get(m.id); if (!p) return; this.wait.delete(m.id);
+        if (m.type === 'audio') p.res(m); else p.rej(new Error(m.message));
+      }
+    };
+    this.w.onerror = () => fail('worker');
+    this.w.postMessage({ type: 'load', download: !!download });
+  },
+  download() {
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
+    this.state = 'downloading'; this.pct = 0; this.render(); this.start(true);
+  },
+  ready() { return this.state === 'ready' && !!this.w; },
+  // Use the Heart voice when the phone makes speech fast enough, and always when there is no internet.
+  usable() { return this.ready() && (!navigator.onLine || this.speed >= 1.5); },
+  speak(text) {
+    return new Promise((res, rej) => { const id = ++this.n; this.wait.set(id, { res, rej }); this.w.postMessage({ type: 'speak', id, text }); });
+  },
+  clear() { if (this.w) this.w.postMessage({ type: 'clear' }); this.failAll(); },
+  failAll() { for (const p of this.wait.values()) p.rej(new Error('stopped')); this.wait.clear(); },
+  render() {
+    const el = $('#offVoice'); if (!el) return;
+    const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2zM3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg></div>';
+    let body;
+    if (this.state === 'downloading') body = `<div class="ovt"><b>Downloading offline voice… ${this.pct}%</b><span class="ovbar"><i style="width:${this.pct}%"></i></span><span>Keep using the app. The voice reads aloud meanwhile.</span></div>`;
+    else if (this.state === 'preparing' || this.state === 'saved') body = '<div class="ovt"><b>Offline voice</b><span>Getting it ready…</span></div>';
+    else if (this.state === 'ready') body = '<div class="ovt"><b>Offline voice ready</b><span>SBEC AI can read aloud even without internet.</span></div>';
+    else if (this.state === 'error') body = '<div class="ovt"><b>Offline voice</b><span>The download stopped. Check your internet and try again.</span></div><button class="ovbtn">Try again</button>';
+    else body = '<div class="ovt"><b>Offline voice</b><span>Download once (about 90 MB, best on Wi-Fi) so SBEC AI reads aloud even without internet.</span></div><button class="ovbtn">Download</button>';
+    el.innerHTML = ic + body;
+    const b = el.querySelector('.ovbtn'); if (b) b.onclick = () => this.download();
+  },
+  init() {
+    this.render();
+    if (this.state === 'saved') { this.start(false); return; }
+    const c = navigator.connection;
+    if (c && c.type === 'wifi' && !c.saveData) setTimeout(() => { if (this.state === 'none') this.download(); }, 4000);
+  },
+};
+
 /* ---------------- voice (natural voice from the server, starts in about a second) ---------------- */
 const Voice = {
   on: store.get('voice', true),
@@ -433,6 +501,7 @@ const Voice = {
     if (!this.on || !text) return;
     this.unlock();
     if (msgEl) this.speakingMsg = msgEl;
+    if (this.seq === 0) this.local = Kok.usable();
     // Join short sentences that are still waiting into one request (fewer requests, smoother voice).
     // Very first piece: keep it short so the voice starts almost instantly.
     if (this.seq === 0 && text.length > 70) {
@@ -456,6 +525,19 @@ const Voice = {
     // Streamed voice: the first sound plays as soon as the first piece arrives (under a second).
     const it = { chunks: [], done: false, started: false };
     const gen = job.gen;
+    if (this.local && Kok.ready()) {
+      // Offline Heart voice, made on the phone.
+      try {
+        const m = await Kok.speak(job.text);
+        if (gen !== this.gen) return;
+        this.unlock();
+        const b = this.ctx.createBuffer(1, m.samples.length, m.sr); b.getChannelData(0).set(m.samples);
+        it.chunks.push(b); it.done = true; this.ready.set(job.id, it); this.drain(); return;
+      } catch (e) {
+        if (gen !== this.gen) return;
+        if (!navigator.onLine) { it.fallback = job.text; it.done = true; this.ready.set(job.id, it); this.drain(); return; }
+      }
+    }
     try {
       const r = await fetch('/api/tts-stream', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: job.text }) });
       if (!r.ok) throw new Error('tts ' + r.status);
@@ -556,7 +638,7 @@ const Voice = {
     if (!busy && this.speakingMsg) { this.speakingMsg = null; UI.voicePill(); UI.refreshPlayButtons(); }
   },
   stop() {
-    this.gen++; this.seq = 0; this.nextPlay = 0; this.queue = []; this.ready.clear(); this.endAt = 0; this.cur = null;
+    this.gen++; this.seq = 0; this.nextPlay = 0; this.queue = []; this.ready.clear(); this.endAt = 0; this.cur = null; Kok.clear();
     this.sources.forEach(s => { try { s.stop(); } catch {} }); this.sources = [];
     this.fbTimers.forEach(clearTimeout); this.fbTimers = [];
     if ('speechSynthesis' in window) speechSynthesis.cancel();
@@ -957,6 +1039,7 @@ window.addEventListener('scroll', () => $('#top').classList.toggle('scrolled', w
 window.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])].find(f => /^image\//.test(f.type)); if (f) startLessonFromFile(f); });
 
 UI.voiceBtn(); UI.acct(); UI.levels(); UI.show('home');
+Kok.init();
 if (state.token) {
   api('me').then(r => { if (!r.user) signOutLocal(); else { state.email = r.user.email; store.set('email', r.user.email); UI.acct(); loadHistory(); } }).catch(() => loadHistory());
 }

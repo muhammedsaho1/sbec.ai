@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SBEC AI — Snap a page. Understand it.</title>
 <meta name="description" content="Snap any page you don't understand. SBEC AI explains it in simple words and reads it out loud.">
-<meta name="theme-color" content="#4f46e5">
+<meta name="theme-color" content="#132a8f">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
@@ -20,9 +20,9 @@
 <style>
 :root{
   --bg:#f5f4ff; --surface:#ffffff; --surface2:#f0eefe; --text:#14122b; --muted:#6b6890; --line:#e6e3fb;
-  --primary:#4f46e5; --primary2:#7c3aed; --accent:#ffb547; --good:#16a34a; --bad:#dc2626;
-  --shadow:0 10px 30px rgba(49,39,140,.10); --radius:20px;
-  --grad:linear-gradient(135deg,#4f46e5 0%,#7c3aed 60%,#a855f7 100%);
+  --primary:#1d3bb5; --primary2:#132a8f; --accent:#ffd23f; --good:#16a34a; --bad:#dc2626;
+  --shadow:0 10px 30px rgba(19,42,143,.10); --radius:20px;
+  --grad:linear-gradient(135deg,#132a8f 0%,#1f4fd1 55%,#1aa0e8 100%);
 }
 @media (prefers-color-scheme:dark){
   :root{ --bg:#0e0c1d; --surface:#17142c; --surface2:#1f1b3a; --text:#f1efff; --muted:#a29fc6; --line:#2b2650; --shadow:0 10px 30px rgba(0,0,0,.35); }
@@ -41,7 +41,7 @@ img{max-width:100%}
 .top.scrolled{border-bottom-color:var(--line)}
 .top .wrap{display:flex;align-items:center;gap:10px;height:64px;padding-top:env(safe-area-inset-top)}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.02em;margin-right:auto;min-width:0}
-.brand img{width:36px;height:36px;border-radius:11px}
+.brand img{width:38px;height:38px;border-radius:11px;background:#fff;box-shadow:0 2px 8px rgba(19,42,143,.15)}
 .brand .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iconbtn{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;background:var(--surface);box-shadow:0 2px 10px rgba(49,39,140,.08);flex:none}
 .iconbtn svg{width:21px;height:21px}
@@ -51,19 +51,25 @@ img{max-width:100%}
 .pillbtn svg{width:18px;height:18px;flex:none}
 
 /* home */
-.hero{margin:18px 0 14px;border-radius:28px;padding:28px 22px 24px;background:var(--grad);color:#fff;position:relative;overflow:hidden;box-shadow:0 18px 40px rgba(79,70,229,.30)}
+.school{display:flex;align-items:center;gap:14px;background:var(--surface);border-radius:20px;padding:10px 16px 10px 10px;box-shadow:var(--shadow);margin-top:14px}
+.school img{width:92px;height:auto;border-radius:12px;background:#fff;flex:none}
+.school b{display:block;font-size:16px;line-height:1.25;color:var(--primary2)}
+@media (prefers-color-scheme:dark){.school b{color:#fff}}
+.school span{display:block;color:var(--muted);font-size:12.5px;font-weight:600;letter-spacing:.02em;margin-top:2px}
+.school .tag{display:inline-block;margin-top:6px;font-size:11px;font-weight:800;color:#b91c1c;background:#fde8e8;border-radius:8px;padding:2px 8px;letter-spacing:.04em}
+.hero{margin:18px 0 14px;border-radius:28px;padding:28px 22px 24px;background:var(--grad);color:#fff;position:relative;overflow:hidden;box-shadow:0 18px 40px rgba(19,42,143,.30)}
 .hero:after{content:"";position:absolute;right:-60px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.10)}
-.hero:before{content:"";position:absolute;left:-40px;bottom:-80px;width:200px;height:200px;border-radius:50%;background:rgba(255,181,71,.18)}
+.hero:before{content:"";position:absolute;left:-40px;bottom:-80px;width:200px;height:200px;border-radius:50%;background:rgba(255,210,63,.20)}
 .hero h1{margin:0 0 8px;font-size:clamp(28px,7vw,38px);line-height:1.1;letter-spacing:-.03em;position:relative}
 .hero p{margin:0 0 20px;opacity:.92;font-size:16px;position:relative;max-width:520px}
 .hero .actions{display:flex;gap:10px;flex-wrap:wrap;position:relative}
-.bigbtn{display:flex;align-items:center;justify-content:center;gap:10px;height:58px;padding:0 24px;border-radius:18px;font-weight:800;font-size:17px;background:#fff;color:#3b30c9;box-shadow:0 8px 20px rgba(0,0,0,.15);flex:1 1 200px}
+.bigbtn{display:flex;align-items:center;justify-content:center;gap:10px;height:58px;padding:0 24px;border-radius:18px;font-weight:800;font-size:17px;background:#fff;color:#132a8f;box-shadow:0 8px 20px rgba(0,0,0,.15);flex:1 1 200px}
 .bigbtn svg{width:24px;height:24px}
 .bigbtn.ghost{background:rgba(255,255,255,.16);color:#fff;box-shadow:none;border:1.5px solid rgba(255,255,255,.35);flex:1 1 160px}
 .levels{display:flex;gap:6px;background:var(--surface);padding:6px;border-radius:16px;box-shadow:var(--shadow);margin:14px 0}
 .levels button{flex:1;height:44px;border-radius:12px;font-weight:700;font-size:14px;color:var(--muted)}
 .levels button.on{background:var(--surface2);color:var(--primary)}
-@media (prefers-color-scheme:dark){.levels button.on{color:#c4b5fd}}
+@media (prefers-color-scheme:dark){.levels button.on{color:#9ec5ff}}
 .levels small{display:block;font-weight:500;font-size:11px;margin-top:-4px}
 .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
 .promo{display:flex;gap:14px;align-items:center}
@@ -74,7 +80,7 @@ img{max-width:100%}
 .promo button{margin-left:auto}
 .btn{height:46px;padding:0 18px;border-radius:14px;font-weight:700;background:var(--grad);color:#fff;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
 .btn.soft{background:var(--surface2);color:var(--primary)}
-@media (prefers-color-scheme:dark){.btn.soft{color:#c4b5fd}}
+@media (prefers-color-scheme:dark){.btn.soft{color:#9ec5ff}}
 .btn:disabled{opacity:.55}
 .btn svg{width:18px;height:18px}
 .sec-h{display:flex;align-items:center;justify-content:space-between;margin:22px 2px 10px}
@@ -120,10 +126,10 @@ textarea:focus,.field:focus{border-color:var(--primary)}
 .msg-user{justify-self:end;max-width:86%;background:var(--grad);color:#fff;border-radius:18px 18px 6px 18px;padding:10px 14px;font-weight:600;font-size:15px}
 .msg-ai{background:var(--surface);border-radius:6px 20px 20px 20px;box-shadow:var(--shadow);padding:16px 18px 12px}
 .msg-ai .who{display:flex;align-items:center;gap:8px;font-weight:800;font-size:13px;color:var(--primary);margin-bottom:6px}
-@media (prefers-color-scheme:dark){.msg-ai .who{color:#c4b5fd}}
+@media (prefers-color-scheme:dark){.msg-ai .who{color:#9ec5ff}}
 .msg-ai .who img{width:22px;height:22px;border-radius:7px}
 .md h2{font-size:17px;margin:16px 0 6px;color:var(--primary);display:flex;align-items:center;gap:8px}
-@media (prefers-color-scheme:dark){.md h2{color:#c4b5fd}}
+@media (prefers-color-scheme:dark){.md h2{color:#9ec5ff}}
 .md h2:first-child{margin-top:4px}
 .md h3{font-size:16px;margin:12px 0 4px}
 .md p{margin:6px 0}
@@ -141,7 +147,7 @@ textarea:focus,.field:focus{border-color:var(--primary)}
 .tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 .chip{height:38px;padding:0 13px;border-radius:12px;background:var(--surface2);font-weight:700;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;color:var(--text)}
 .chip svg{width:17px;height:17px;color:var(--primary)}
-@media (prefers-color-scheme:dark){.chip svg{color:#c4b5fd}}
+@media (prefers-color-scheme:dark){.chip svg{color:#9ec5ff}}
 .chip.play{background:var(--grad);color:#fff}
 .chip.play svg{color:#fff}
 .chip:disabled{opacity:.5}
@@ -200,6 +206,10 @@ textarea:focus,.field:focus{border-color:var(--primary)}
 
 <!-- HOME -->
 <main id="home" class="wrap">
+  <div class="school">
+    <img src="/icons/sbec-logo.webp" alt="Bilingual SBEC International logo" width="92" height="68">
+    <div><b>Bilingual SBEC International</b><span>Wisdom · Steadfastness · Efficiency</span><span class="tag">SBEC AI STUDY HELPER</span></div>
+  </div>
   <section class="hero">
     <h1>Snap a page.<br>Understand it.</h1>
     <p>Take a photo of any page you don't understand. SBEC AI explains it in simple words and reads it out for you.</p>
@@ -234,7 +244,7 @@ textarea:focus,.field:focus{border-color:var(--primary)}
       <div><span class="n">3</span><b>Listen</b>Read out loud</div>
     </div>
   </div>
-  <footer>SBEC AI · by Saho Digital Services</footer>
+  <footer>SBEC AI · Bilingual SBEC International<br>Built by Saho Digital Services</footer>
 </main>
 
 <!-- LESSON -->

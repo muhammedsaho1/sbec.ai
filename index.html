@@ -52,6 +52,8 @@ img{max-width:100%}
 
 /* home */
 #installBtn svg{width:16px;height:16px}
+@media (max-width:440px){#installBtn span{display:none}#installBtn{padding-left:11px;padding-right:11px;gap:0}}
+.overlay.iar .sheet{padding-bottom:78px}
 .isteps{margin:10px 0 4px 22px;padding:0;font-size:15.5px;line-height:1.5}
 .isteps li{margin:10px 0}
 .ishare{width:18px;height:18px;vertical-align:-3px;color:var(--primary)}
@@ -460,9 +462,10 @@ const Install = {
     } else {
       steps = ['Tap the browser menu <b>⋮</b> (top right)', 'Tap <b>Install app</b> or <b>Add to Home screen</b>', 'Tap <b>Install</b>. Done!'];
     }
-    const ov = document.createElement('div'); ov.className = 'overlay';
+    const arrow = this.iphone() && this.safari();
+    const ov = document.createElement('div'); ov.className = 'overlay' + (arrow ? ' iar' : '');
     ov.innerHTML = `<div class="sheet"><div class="grab"></div><h3>Install SBEC AI</h3><ol class="isteps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol><p class="inote">Then open SBEC AI from your home screen. It gets SBEC Voice ready by itself.</p><div class="row"><button class="btn" id="iOk">Got it</button></div></div>` +
-      (this.iphone() && this.safari() ? '<div class="iarrow" aria-hidden="true">↓</div>' : '');
+      (arrow ? '<div class="iarrow" aria-hidden="true">↓</div>' : '');
     document.body.appendChild(ov);
     const close = () => ov.remove();
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });

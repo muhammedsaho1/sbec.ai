@@ -1,0 +1,68 @@
+# Puts the offline "Heart" voice (Kokoro-82M, Apache-2.0) into this repo.
+# Downloads it from the official Hugging Face repo, checks it against Hugging Face's own
+# checksum, then splits the 92 MB model into pieces under 20 MB (GitHub and Cloudflare limits).
+name: Add offline voice
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/add-voice.yml']
+permissions:
+  contents: write
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download, check and split
+        run: |
+          set -euo pipefail
+          REPO=onnx-community/Kokoro-82M-v1.0-ONNX
+          B=https://huggingface.co/$REPO/resolve/main
+          OUT=voice/kokoro
+          rm -rf "$OUT"; mkdir -p "$OUT"; cd "$OUT"
+          curl -fsSL --retry 3 -o model.onnx "$B/onnx/model_quantized.onnx"
+          curl -fsSL --retry 3 -o af_heart.bin "$B/voices/af_heart.bin"
+          for f in config.json tokenizer.json tokenizer_config.json; do curl -fsSL --retry 3 -o "$f" "$B/$f"; done
+          curl -fsSL "https://huggingface.co/api/models/$REPO/tree/main/onnx" > /tmp/onnx.json
+          curl -fsSL "https://huggingface.co/api/models/$REPO/tree/main/voices" > /tmp/voices.json
+          python3 - <<'PY'
+          import json, hashlib, os
+          def sha(p):
+              h = hashlib.sha256()
+              with open(p, 'rb') as f:
+                  for c in iter(lambda: f.read(1 << 20), b''): h.update(c)
+              return h.hexdigest()
+          def official(listing, path):
+              for e in json.load(open(listing)):
+                  if e['path'] == path: return e['lfs']['oid']
+              raise SystemExit('not listed: ' + path)
+          assert sha('model.onnx') == official('/tmp/onnx.json', 'onnx/model_quantized.onnx'), 'model checksum mismatch'
+          assert sha('af_heart.bin') == official('/tmp/voices.json', 'voices/af_heart.bin'), 'voice checksum mismatch'
+          size = os.path.getsize('model.onnx'); part = 18 * 1024 * 1024; parts = []
+          with open('model.onnx', 'rb') as f:
+              i = 0
+              while True:
+                  b = f.read(part)
+                  if not b: break
+                  name = 'model.part%d.bin' % i
+                  open(name, 'wb').write(b)
+                  parts.append({'file': name, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest()})
+                  i += 1
+          man = {'model': 'onnx-community/Kokoro-82M-v1.0-ONNX', 'license': 'Apache-2.0', 'voice': 'af_heart',
+                 'size': size, 'sha256': sha('model.onnx'), 'parts': parts,
+                 'files': ['config.json', 'tokenizer.json', 'tokenizer_config.json', 'af_heart.bin']}
+          json.dump(man, open('manifest.json', 'w'), indent=1)
+          os.remove('model.onnx')
+          print(json.dumps(man, indent=1))
+          PY
+          ls -la
+      - name: Commit
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice/kokoro
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Add offline Heart voice (Kokoro-82M q8, split into pieces under 20 MB)"
+          git push

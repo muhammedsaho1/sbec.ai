@@ -11,8 +11,14 @@
 /index.html
   Cache-Control: no-cache
 
+/tts-worker.js
+  Cache-Control: no-cache
+
 /vendor/*
   Cache-Control: public, max-age=604800
 
 /icons/*
+  Cache-Control: public, max-age=604800
+
+/voice/*
   Cache-Control: public, max-age=604800

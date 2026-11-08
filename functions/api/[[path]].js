@@ -145,26 +145,35 @@ function geminiContents(image, messages, question) {
 }
 
 async function callGemini(env, body, stream) {
-  const model = env.GEMINI_MODEL || 'gemini-flash-latest';
+  // Try the main model first; if Google says it is busy (or it is too slow), fall back to other Flash models.
   const base = env.GEMINI_BASE || GEMINI_BASE;
-  const url = `${base}${encodeURIComponent(model)}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`;
-  const send = async (b) => {
-    // Give up if Gemini has not started answering within 40 seconds.
+  const models = [...new Set([env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'].filter(Boolean))];
+  const send = async (model, b, ms) => {
+    const url = `${base}${encodeURIComponent(model)}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`;
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 40000);
+    const timer = setTimeout(() => ac.abort(), ms);
     try {
       return await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(b), signal: ac.signal });
     } catch (e) {
       return new Response(JSON.stringify({ error: { message: 'Gemini did not respond in time' } }), { status: 504 });
     } finally { clearTimeout(timer); }
   };
-  let res = await send(body);
-  if (res.status === 400 && body.generationConfig?.thinkingConfig) {
-    // Older models don't accept thinkingLevel — retry without it.
-    const b2 = JSON.parse(JSON.stringify(body)); delete b2.generationConfig.thinkingConfig;
-    res = await send(b2);
+  let last = null;
+  for (let k = 0; k < models.length; k++) {
+    const model = models[k];
+    const ms = k === models.length - 1 ? 40000 : 20000;
+    let res = await send(model, body, ms);
+    if (res.status === 400 && body.generationConfig?.thinkingConfig) {
+      // Older models don't accept thinkingLevel — retry without it.
+      const b2 = JSON.parse(JSON.stringify(body)); delete b2.generationConfig.thinkingConfig;
+      res = await send(model, b2, ms);
+    }
+    if (res.ok) return res;
+    last = res;
+    if (![429, 500, 502, 503, 504].includes(res.status)) return res;
+    console.log('gemini busy, trying next model', model, res.status);
   }
-  return res;
+  return last;
 }
 
 function friendlyAiError(status, text) {

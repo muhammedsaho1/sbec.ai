@@ -403,100 +403,84 @@ class SentenceFeeder {
   emit(seg) { const c = cleanForSpeech(seg); if (c) chunkLong(c).forEach(x => this.on(x)); }
 }
 
-/* ---------------- voice (Kokoro "Heart", on device) ---------------- */
+/* ---------------- voice (natural voice from the server, starts in about a second) ---------------- */
 const Voice = {
   on: store.get('voice', true),
-  status: 'idle',        // idle | loading | ready | failed
-  pct: 0,
-  worker: null,
+  status: 'ready',
+  pct: 100,
   ctx: null,
   gen: 0,
   seq: 0,
   nextPlay: 0,
-  pending: new Map(),
-  texts: new Map(),
+  queue: [],
+  inflight: 0,
+  ready: new Map(),
   endAt: 0,
   sources: [],
+  fbTimers: [],
   speakingMsg: null,
-  queued: 0,
-  useFallback: false,
   paused: false,
 
-  supported() { return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined'; },
   unlock() {
     try {
       if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
       if (this.ctx.state === 'suspended' && !this.paused) this.ctx.resume();
     } catch {}
   },
-  ensure() {
-    if (this.worker || this.useFallback) return;
-    if (!this.supported()) { this.useFallback = true; return; }
-    try {
-      this.worker = new Worker('/tts-worker.js', { type: 'module' });
-    } catch (e) { this.useFallback = true; return; }
-    this.status = 'loading'; UI.voicePill();
-    this.worker.onmessage = (ev) => this.onWorker(ev.data);
-    this.worker.onerror = () => { this.fail(); };
-    this.worker.postMessage({ type: 'load' });
-  },
-  fail() {
-    if (this.status === 'failed') return;
-    this.status = 'failed'; this.useFallback = 'speechSynthesis' in window;
-    try { this.worker && this.worker.terminate(); } catch {}
-    this.worker = null;
-    // replay what was waiting with the device voice
-    const waiting = [...this.texts.entries()].filter(([id]) => id >= this.nextPlay).sort((a, b) => a[0] - b[0]).map(e => e[1]);
-    this.pending.clear(); this.texts.clear();
-    if (this.useFallback) { toast('Could not load the SBEC voice — using your phone\'s voice for now'); waiting.forEach(t => this.fallbackSay(t)); }
-    UI.voicePill();
-  },
-  onWorker(m) {
-    if (m.type === 'progress') { this.pct = m.pct; this.status = 'loading'; UI.voicePill(); }
-    else if (m.type === 'ready') { this.status = 'ready'; this.pct = 100; UI.voicePill(); }
-    else if (m.type === 'error') { this.fail(); }
-    else if (m.type === 'audio') {
-      if (m.gen !== this.gen) return;
-      this.pending.set(m.id, { samples: m.samples, sr: m.sr });
-      this.drain();
-    } else if (m.type === 'fail') {
-      if (m.gen !== this.gen) return;
-      this.pending.set(m.id, { skip: true }); this.drain();
-    }
-  },
-  drain() {
-    while (this.pending.has(this.nextPlay)) {
-      const item = this.pending.get(this.nextPlay); this.pending.delete(this.nextPlay); this.texts.delete(this.nextPlay); this.nextPlay++;
-      if (!item || item.skip || !item.samples) continue;
-      this.unlock();
-      const ctx = this.ctx; if (!ctx) continue;
-      const buf = ctx.createBuffer(1, item.samples.length, item.sr);
-      buf.copyToChannel(item.samples, 0);
-      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
-      const at = Math.max(ctx.currentTime + 0.05, this.endAt);
-      src.start(at); this.endAt = at + buf.duration + 0.18;
-      this.sources.push(src);
-      src.onended = () => { this.sources = this.sources.filter(s => s !== src); this.checkDone(); };
-    }
-    UI.voicePill();
-  },
-  checkDone() {
-    if (!this.sources.length && this.nextPlay >= this.seq && !this.fallbackBusy()) {
-      this.speakingMsg = null; UI.voicePill(); UI.refreshPlayButtons();
-    }
-  },
-  fallbackBusy() { return this.useFallback && 'speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending); },
+  ensure() { this.unlock(); },
   say(text, msgEl) {
-    if (!this.on) return;
+    if (!this.on || !text) return;
     this.unlock();
     if (msgEl) this.speakingMsg = msgEl;
-    if (this.useFallback) { this.fallbackSay(text); UI.voicePill(); UI.refreshPlayButtons(); return; }
-    this.ensure();
-    if (this.useFallback) { this.fallbackSay(text); return; }
-    const id = this.seq++;
-    this.texts.set(id, text);   // kept so we can fall back if the model fails to load
-    this.worker.postMessage({ type: 'speak', id, gen: this.gen, text });
+    // Join short sentences that are still waiting into one request (fewer requests, smoother voice).
+    const last = this.queue[this.queue.length - 1];
+    if (last && last.gen === this.gen && (last.text.length + text.length) < 360 && this.seq > 1) last.text += ' ' + text;
+    else this.queue.push({ id: this.seq++, text, gen: this.gen });
+    this.pump();
     UI.voicePill(); UI.refreshPlayButtons();
+  },
+  pump() {
+    while (this.inflight < 3 && this.queue.length) {
+      const job = this.queue.shift();
+      this.inflight++;
+      this.fetchAudio(job).finally(() => { this.inflight--; this.pump(); this.checkDone(); });
+    }
+  },
+  async fetchAudio(job) {
+    let item;
+    try {
+      const r = await fetch('/api/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: job.text }) });
+      if (!r.ok) throw new Error('tts ' + r.status);
+      const buf = await r.arrayBuffer();
+      if (job.gen !== this.gen) return;
+      this.unlock();
+      item = { buffer: await this.ctx.decodeAudioData(buf) };
+    } catch (e) {
+      item = { fallback: job.text };
+    }
+    if (job.gen !== this.gen) return;
+    this.ready.set(job.id, item);
+    this.drain();
+  },
+  drain() {
+    while (this.ready.has(this.nextPlay)) {
+      const it = this.ready.get(this.nextPlay); this.ready.delete(this.nextPlay); this.nextPlay++;
+      const ctx = this.ctx; if (!ctx) continue;
+      const at = Math.max(ctx.currentTime + 0.03, this.endAt);
+      if (it.buffer) {
+        const src = ctx.createBufferSource(); src.buffer = it.buffer; src.connect(ctx.destination);
+        src.start(at); this.endAt = at + it.buffer.duration + 0.12;
+        this.sources.push(src);
+        src.onended = () => { this.sources = this.sources.filter(s => s !== src); this.checkDone(); };
+      } else if (it.fallback && 'speechSynthesis' in window) {
+        // Server voice unavailable for this part: use the phone's own voice so reading never stops.
+        const gen = this.gen, text = it.fallback;
+        const t = setTimeout(() => { if (gen === this.gen) this.fallbackSay(text); }, Math.max(0, (at - ctx.currentTime) * 1000));
+        this.fbTimers.push(t);
+        this.endAt = at + Math.max(1.5, text.length * 0.07);
+      }
+    }
+    UI.voicePill();
   },
   fallbackSay(text) {
     if (!('speechSynthesis' in window)) return;
@@ -504,13 +488,19 @@ const Voice = {
     const vs = speechSynthesis.getVoices();
     const pick = vs.find(v => /en[-_](US|GB)/i.test(v.lang) && /female|samantha|zira|aria|jenny|google us english/i.test(v.name)) || vs.find(v => /^en/i.test(v.lang));
     if (pick) u.voice = pick;
-    u.rate = 1; u.onend = () => this.checkDone();
+    u.onend = () => this.checkDone();
     speechSynthesis.speak(u);
   },
+  checkDone() {
+    const busy = this.sources.length || this.queue.length || this.inflight || this.ready.size || this.nextPlay < this.seq ||
+      ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) ||
+      (this.ctx && this.endAt > this.ctx.currentTime + 0.05);
+    if (!busy && this.speakingMsg) { this.speakingMsg = null; UI.voicePill(); UI.refreshPlayButtons(); }
+  },
   stop() {
-    this.gen++; this.seq = 0; this.nextPlay = 0; this.pending.clear(); this.texts.clear(); this.endAt = 0;
+    this.gen++; this.seq = 0; this.nextPlay = 0; this.queue = []; this.ready.clear(); this.endAt = 0;
     this.sources.forEach(s => { try { s.stop(); } catch {} }); this.sources = [];
-    if (this.worker) this.worker.postMessage({ type: 'clear' });
+    this.fbTimers.forEach(clearTimeout); this.fbTimers = [];
     if ('speechSynthesis' in window) speechSynthesis.cancel();
     this.paused = false; if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
     this.speakingMsg = null; UI.voicePill(); UI.refreshPlayButtons();
@@ -529,7 +519,7 @@ const Voice = {
   },
   setOn(v) {
     this.on = v; store.set('voice', v);
-    if (!v) this.stop(); else { this.unlock(); this.ensure(); }
+    if (!v) this.stop(); else this.unlock();
     UI.voiceBtn(); UI.refreshPlayButtons();
   },
 };

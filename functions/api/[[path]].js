@@ -429,6 +429,66 @@ function pcmToWav(pcm, rate) {
   w(36, 'data'); v.setUint32(40, pcm.length, true);
   const out = new Uint8Array(44 + pcm.length); out.set(new Uint8Array(h), 0); out.set(pcm, 44); return out;
 }
+// Streamed voice: sends raw 16-bit PCM pieces as soon as Google makes them, so playback starts sooner.
+async function ttsStream(env, req, ctx) {
+  if (!env.GEMINI_API_KEY) return fail('Voice is not configured.', 500);
+  const b = await readJson(req);
+  const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 700);
+  if (!text) return fail('Nothing to read.');
+  const voice = env.TTS_VOICE || 'Sulafat';
+  const cacheKey = new Request('https://sbec-tts.cache/' + await sha256(voice + '|' + text));
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  if (!(await takeQuota(env, 'tts:' + clientIp(req), parseInt(env.TTS_DAILY || '800')))) return fail('Voice limit reached for today.', 429);
+  const base = env.GEMINI_BASE || GEMINI_BASE;
+  const models = [...new Set([env.TTS_MODEL, 'gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'].filter(Boolean))];
+  const body = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
+  let lastStatus = 0;
+  for (const model of models) {
+    const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 12000);
+    let r;
+    try { r = await fetch(`${base}${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: ac.signal }); }
+    catch (e) { clearTimeout(tm); lastStatus = 504; continue; }
+    if (!r.ok || !r.body) { clearTimeout(tm); lastStatus = r.status; try { await r.text(); } catch (e) {} if ([400, 404, 429, 500, 502, 503, 504].includes(r.status)) continue; break; }
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const t0 = Date.now();
+    const pump = (async () => {
+      const reader = r.body.getReader(); const dec = new TextDecoder();
+      let buf = '', all = [], total = 0, first = 0;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+            if (!line.startsWith('data:')) continue;
+            let j; try { j = JSON.parse(line.slice(5)); } catch (e) { continue; }
+            for (const p of (j.candidates?.[0]?.content?.parts || [])) {
+              const inl = p.inlineData || p.inline_data; if (!inl || !inl.data) continue;
+              const bin = atob(inl.data); const u = new Uint8Array(bin.length);
+              for (let k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k);
+              if (!first) first = Date.now() - t0;
+              all.push(u); total += u.length; await writer.write(u);
+            }
+          }
+        }
+        if (total > 0) {
+          const pcm = new Uint8Array(total); let o = 0; for (const u of all) { pcm.set(u, o); o += u.length; }
+          await cache.put(cacheKey, new Response(pcmToWav(pcm, 24000), { headers: { 'content-type': 'audio/wav', 'cache-control': 'public, max-age=2592000', 'x-tts-model': model } }));
+        }
+        console.log('tts stream', model, 'first', first, 'ms total', total);
+      } catch (e) { console.log('tts stream error', String(e)); }
+      finally { clearTimeout(tm); try { await writer.close(); } catch (e) {} }
+    })();
+    ctx.waitUntil(pump);
+    return new Response(readable, { headers: { 'content-type': 'audio/L16;rate=24000', 'cache-control': 'no-store', 'x-tts-model': model } });
+  }
+  return fail('Voice is busy right now. [' + lastStatus + ']', 502);
+}
+
 async function tts(env, req, ctx) {
   if (!env.GEMINI_API_KEY) return fail('Voice is not configured.', 500);
   const b = await readJson(req);
@@ -533,6 +593,7 @@ export async function onRequest(ctx) {
     if (path === 'explain' && method === 'POST') return await explain(env, req, ctx);
     if (path === 'quiz' && method === 'POST') return await quiz(env, req);
     if (path === 'tts' && method === 'POST') return await tts(env, req, ctx);
+    if (path === 'tts-stream' && method === 'POST') return await ttsStream(env, req, ctx);
     if (path === 'auth/start' && method === 'POST') return await authStart(env, req);
     if (path === 'auth/verify' && method === 'POST') return await authVerify(env, req);
     if (path === 'auth/logout' && method === 'POST') return await logout(env, req);

@@ -433,6 +433,11 @@ const Voice = {
     this.unlock();
     if (msgEl) this.speakingMsg = msgEl;
     // Join short sentences that are still waiting into one request (fewer requests, smoother voice).
+    // Very first piece: keep it short so the voice starts almost instantly.
+    if (this.seq === 0 && text.length > 70) {
+      let cut = text.indexOf(', ', 25); if (cut < 0 || cut > 90) cut = text.lastIndexOf(' ', 60);
+      if (cut > 15) { const head = text.slice(0, cut + 1).trim(); text = text.slice(cut + 1).trim(); this.queue.push({ id: this.seq++, text: head, gen: this.gen }); }
+    }
     const last = this.queue[this.queue.length - 1];
     if (last && last.gen === this.gen && (last.text.length + text.length) < 360 && this.seq > 1) last.text += ' ' + text;
     else this.queue.push({ id: this.seq++, text, gen: this.gen });

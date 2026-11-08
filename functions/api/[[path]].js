@@ -419,6 +419,30 @@ export async function onRequest(ctx) {
   const path = url.pathname.replace(/^\/api\/?/, '').replace(/\/+$/, '');
   const method = req.method.toUpperCase();
   if (method === 'OPTIONS') return new Response(null, { status: 204 });
+  if (path === 'health' && url.searchParams.get('ai') === '1') {
+    // AI self-test: tries the configured model with a tiny prompt and lists available Flash models.
+    const out = { model: env.GEMINI_MODEL || 'gemini-flash-latest', tests: [] };
+    const base = env.GEMINI_BASE || GEMINI_BASE;
+    const tryCall = async (label, body) => {
+      const t0 = Date.now(); const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 25000);
+      try {
+        const r = await fetch(`${base}${encodeURIComponent(out.model)}:generateContent`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: ac.signal });
+        const t = await r.text(); let msg = '';
+        try { const j = JSON.parse(t); msg = j.error ? j.error.message : (j.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text).join('').slice(0, 80); } catch { msg = t.slice(0, 120); }
+        out.tests.push({ label, status: r.status, ms: Date.now() - t0, msg: String(msg).slice(0, 200) });
+      } catch (e) { out.tests.push({ label, status: 'timeout/error', ms: Date.now() - t0, msg: String(e && e.message || e) }); }
+      finally { clearTimeout(tm); }
+    };
+    await tryCall('plain', { contents: [{ role: 'user', parts: [{ text: 'Say hi in 3 words.' }] }] });
+    await tryCall('thinking-low', { contents: [{ role: 'user', parts: [{ text: 'Say hi in 3 words.' }] }], generationConfig: { thinkingConfig: { thinkingLevel: 'low' } } });
+    try {
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
+      const j = await r.json(); out.listStatus = r.status;
+      out.flashModels = (j.models || []).map(m => m.name.replace('models/', '')).filter(n => /flash/.test(n)).slice(0, 40);
+      if (j.error) out.listError = j.error.message;
+    } catch (e) { out.listError = String(e); }
+    return ok(out);
+  }
   if (path === 'health') {
     const db = env.DB && typeof env.DB.prepare === 'function';
     let dbOk = false, dbError = null;

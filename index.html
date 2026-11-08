@@ -421,8 +421,8 @@ const Install = {
     const el = $('#installCard'); if (!el) return;
     if (this.installed() || (!this.evt && !this.ios())) { el.classList.add('hidden'); return; }
     const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></svg></div>';
-    const txt = this.evt ? 'Open it like a normal app. It also gets the offline voice ready for you.'
-      : 'Tap the Share button, then “Add to Home Screen”. It also gets the offline voice ready for you.';
+    const txt = this.evt ? 'Open it like a normal app. It also gets SBEC Voice ready for you.'
+      : 'Tap the Share button, then “Add to Home Screen”. It also gets SBEC Voice ready for you.';
     el.innerHTML = ic + `<div class="ovt"><b>Add SBEC AI to your home screen</b><span>${txt}</span></div>` + (this.evt ? '<button class="ovbtn">Add</button>' : '');
     el.classList.remove('hidden');
     const b = el.querySelector('.ovbtn');
@@ -440,30 +440,30 @@ const Install = {
   },
 };
 
-/* ---------------- offline voice (the "Heart" voice, kept on the phone) ---------------- */
-// Until it is downloaded, the fast Google voice reads aloud. After the download (Wi-Fi, or when the
-// learner taps Download), the Heart voice runs on the phone itself, even without internet.
+/* ---------------- SBEC Voice (our own voice, kept on the phone) ---------------- */
+// SBEC Voice: our own voice engine that runs on the phone itself (/sbec-voice.js). No server, no limits,
+// works offline. Until it is downloaded, the Google voice reads aloud.
 const Kok = {
-  state: store.get('kokoro', '') === 'ok' ? 'saved' : 'none', // none | downloading | preparing | ready | error | saved
+  state: store.get('sbecvoice', '') === 'ok' ? 'saved' : 'none', // none | downloading | preparing | ready | error | saved
   pct: 0, speed: 0, w: null, n: 0, wait: new Map(),
   start(download) {
     if (this.w) { if (download) this.w.postMessage({ type: 'load', download: true }); return; }
-    try { this.w = new Worker('/tts-worker.js', { type: 'module' }); }
+    try { this.w = new Worker('/sbec-voice.js', { type: 'module' }); }
     catch (e) { this.state = 'error'; this.render(); return; }
     const fail = (msg) => {
       try { this.w.terminate(); } catch {}
       this.w = null; this.failAll();
-      if (msg === 'missing') { store.set('kokoro', ''); this.state = 'none'; } else this.state = 'error';
+      if (msg === 'missing') { store.set('sbecvoice', ''); this.state = 'none'; } else this.state = 'error';
       this.render();
     };
     this.w.onmessage = (ev) => {
       const m = ev.data || {};
       if (m.type === 'progress') { if (m.pct < 100) { this.state = 'downloading'; this.pct = m.pct; this.render(); } }
-      else if (m.type === 'preparing') { store.set('kokoro', 'ok'); if (this.state !== 'saved') { this.state = 'preparing'; this.render(); } }
+      else if (m.type === 'preparing') { store.set('sbecvoice', 'ok'); if (this.state !== 'saved') { this.state = 'preparing'; this.render(); } }
       else if (m.type === 'ready') {
-        this.speed = m.speed || 0; store.set('kokoro', 'ok');
+        this.speed = m.speed || 0; store.set('sbecvoice', 'ok'); store.set('sbecspeed', this.speed);
         // Not needed right now: free the phone's memory. It loads again when needed.
-        if (navigator.onLine && !(Voice.ttsDownUntil > Date.now())) { try { this.w.terminate(); } catch {} this.w = null; this.failAll(); this.state = 'saved'; }
+        if (this.speed < 1.3 && navigator.onLine && !(Voice.ttsDownUntil > Date.now())) { try { this.w.terminate(); } catch {} this.w = null; this.failAll(); this.state = 'saved'; }
         else this.state = 'ready';
         this.render();
       }
@@ -485,7 +485,7 @@ const Kok = {
   // Load the Heart voice only when it's needed (no internet, or the online voice is busy).
   wake() { if (this.state === 'saved' && !this.w) this.start(false); },
   // Online, the fast Google voice reads. The Heart voice takes over when there's no internet or Google is busy.
-  usable() { return this.ready() && this.speed >= 0.7 && (!navigator.onLine || Voice.ttsDownUntil > Date.now()); },
+  usable() { return this.ready() && (this.speed >= 1.3 || ((!navigator.onLine || Voice.ttsDownUntil > Date.now()) && this.speed >= 0.6)); },
   speak(text) {
     return new Promise((res, rej) => {
       const id = ++this.n;
@@ -500,18 +500,19 @@ const Kok = {
     const el = $('#offVoice'); if (!el) return;
     const ic = '<div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2"/><path d="M21 15a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2zM3 15a2 2 0 0 0 2 2h1v-6H5a2 2 0 0 0-2 2z"/></svg></div>';
     let body;
-    if (this.state === 'downloading') body = `<div class="ovt"><b>Downloading offline voice… ${this.pct}%</b><span class="ovbar"><i style="width:${this.pct}%"></i></span><span>Keep using the app. The voice reads aloud meanwhile.</span></div>`;
-    else if (this.state === 'preparing') body = '<div class="ovt"><b>Offline voice</b><span>Getting it ready…</span></div>';
-    else if (this.state === 'ready' || this.state === 'saved') body = '<div class="ovt"><b>Offline voice ready</b><span>SBEC AI can read aloud even without internet.</span></div>';
-    else if (this.state === 'error') body = '<div class="ovt"><b>Offline voice</b><span>The download stopped. Check your internet and try again.</span></div><button class="ovbtn">Try again</button>';
-    else body = '<div class="ovt"><b>Offline voice</b><span>Download once (about 90 MB, best on Wi-Fi) so SBEC AI reads aloud even without internet.</span></div><button class="ovbtn">Download</button>';
+    if (this.state === 'downloading') body = `<div class="ovt"><b>Downloading SBEC Voice… ${this.pct}%</b><span class="ovbar"><i style="width:${this.pct}%"></i></span><span>Keep using the app. The voice reads aloud meanwhile.</span></div>`;
+    else if (this.state === 'preparing') body = '<div class="ovt"><b>SBEC Voice</b><span>Getting it ready…</span></div>';
+    else if (this.state === 'ready' || this.state === 'saved') body = '<div class="ovt"><b>SBEC Voice ready</b><span>Reads aloud with no limits, even without internet.</span></div>';
+    else if (this.state === 'error') body = '<div class="ovt"><b>SBEC Voice</b><span>The download stopped. Check your internet and try again.</span></div><button class="ovbtn">Try again</button>';
+    else body = '<div class="ovt"><b>SBEC Voice</b><span>Download once (about 60 MB) so SBEC AI reads aloud with no limits, even without internet.</span></div><button class="ovbtn">Download</button>';
     el.innerHTML = ic + body;
     const b = el.querySelector('.ovbtn'); if (b) b.onclick = () => this.download();
   },
   init() {
     this.render();
     window.addEventListener('offline', () => this.wake());
-    if (this.state === 'saved') return;
+    // Fast phones: our own voice reads everything (no limits), so get it ready now.
+    if (this.state === 'saved') { if (store.get('sbecspeed', 0) >= 1.3) this.start(false); return; }
     if (Install.installed()) { setTimeout(() => this.onInstalled(), 2500); return; }
     const c = navigator.connection;
     if (c && c.type === 'wifi' && !c.saveData) setTimeout(() => { if (this.state === 'none') this.download(); }, 4000);

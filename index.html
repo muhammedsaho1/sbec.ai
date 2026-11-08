@@ -420,6 +420,7 @@ const Voice = {
   fbTimers: [],
   speakingMsg: null,
   paused: false,
+  cur: null,
 
   unlock() {
     try {
@@ -452,38 +453,90 @@ const Voice = {
     }
   },
   async fetchAudio(job) {
-    let item;
+    // Streamed voice: the first sound plays as soon as the first piece arrives (under a second).
+    const it = { chunks: [], done: false, started: false };
+    const gen = job.gen;
     try {
-      const r = await fetch('/api/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: job.text }) });
+      const r = await fetch('/api/tts-stream', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: job.text }) });
       if (!r.ok) throw new Error('tts ' + r.status);
-      const buf = await r.arrayBuffer();
-      if (job.gen !== this.gen) return;
+      if (gen !== this.gen) return;
       this.unlock();
-      item = { buffer: await this.ctx.decodeAudioData(buf) };
+      const type = r.headers.get('content-type') || '';
+      if (!/L16/i.test(type) || !r.body) {
+        // Already made before: whole clip comes from the cache instantly.
+        const buf = await r.arrayBuffer();
+        if (gen !== this.gen) return;
+        const b = await this.ctx.decodeAudioData(buf);
+        it.chunks.push(b); it.done = true;
+        this.ready.set(job.id, it); this.drain(); return;
+      }
+      this.ready.set(job.id, it);
+      const reader = r.body.getReader();
+      let carry = null, pend = [], pendLen = 0, first = true;
+      const flush = () => {
+        if (!pendLen) return;
+        const f = new Float32Array(pendLen); let o = 0;
+        for (const p of pend) { f.set(p, o); o += p.length; }
+        pend = []; pendLen = 0;
+        const b = this.ctx.createBuffer(1, f.length, 24000); b.getChannelData(0).set(f);
+        it.chunks.push(b); if (this.cur === it) this.feed(it); else this.drain();
+      };
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (gen !== this.gen) { try { reader.cancel(); } catch {} return; }
+        if (done) break;
+        let u = value;
+        if (carry) { const m = new Uint8Array(carry.length + u.length); m.set(carry); m.set(u, carry.length); u = m; carry = null; }
+        if (u.length % 2) { carry = u.slice(u.length - 1); u = u.slice(0, u.length - 1); }
+        const dv = new DataView(u.buffer, u.byteOffset, u.byteLength); const n = u.length / 2;
+        const f = new Float32Array(n);
+        for (let i = 0; i < n; i++) f[i] = dv.getInt16(i * 2, true) / 32768;
+        pend.push(f); pendLen += n;
+        if (pendLen >= (first ? 2400 : 9600)) { first = false; flush(); }
+      }
+      flush();
+      if (!it.chunks.length) throw new Error('no audio');
     } catch (e) {
-      item = { fallback: job.text };
+      if (gen !== this.gen) return;
+      if (!it.chunks.length) { it.fallback = job.text; this.ready.set(job.id, it); }
     }
-    if (job.gen !== this.gen) return;
-    this.ready.set(job.id, item);
+    if (gen !== this.gen) return;
+    it.done = true;
+    this.feed(it);
     this.drain();
   },
-  drain() {
-    while (this.ready.has(this.nextPlay)) {
-      const it = this.ready.get(this.nextPlay); this.ready.delete(this.nextPlay); this.nextPlay++;
-      const ctx = this.ctx; if (!ctx) continue;
+  // Plays any new pieces of the clip that is playing now.
+  feed(it) {
+    if (this.cur !== it || !this.ctx) return;
+    const ctx = this.ctx;
+    while (it.chunks.length) {
+      const b = it.chunks.shift();
       const at = Math.max(ctx.currentTime + 0.03, this.endAt);
-      if (it.buffer) {
-        const src = ctx.createBufferSource(); src.buffer = it.buffer; src.connect(ctx.destination);
-        src.start(at); this.endAt = at + it.buffer.duration + 0.12;
-        this.sources.push(src);
-        src.onended = () => { this.sources = this.sources.filter(s => s !== src); this.checkDone(); };
-      } else if (it.fallback && 'speechSynthesis' in window) {
+      const src = ctx.createBufferSource(); src.buffer = b; src.connect(ctx.destination);
+      src.start(at); this.endAt = at + b.duration;
+      this.sources.push(src);
+      src.onended = () => { this.sources = this.sources.filter(s => s !== src); this.checkDone(); };
+    }
+    if (it.done) { this.cur = null; this.endAt += 0.12; }
+  },
+  drain() {
+    while (!this.cur && this.ready.has(this.nextPlay)) {
+      const it = this.ready.get(this.nextPlay);
+      const ctx = this.ctx; if (!ctx) { this.ready.delete(this.nextPlay); this.nextPlay++; continue; }
+      if (it.fallback) {
+        this.ready.delete(this.nextPlay); this.nextPlay++;
+        if (!('speechSynthesis' in window)) continue;
         // Server voice unavailable for this part: use the phone's own voice so reading never stops.
+        const at = Math.max(ctx.currentTime + 0.03, this.endAt);
         const gen = this.gen, text = it.fallback;
         const t = setTimeout(() => { if (gen === this.gen) this.fallbackSay(text); }, Math.max(0, (at - ctx.currentTime) * 1000));
         this.fbTimers.push(t);
         this.endAt = at + Math.max(1.5, text.length * 0.07);
+        continue;
       }
+      if (!it.chunks.length && !it.done) break; // wait for its first piece
+      this.ready.delete(this.nextPlay); this.nextPlay++;
+      this.cur = it; this.feed(it);
     }
     UI.voicePill();
   },
@@ -497,13 +550,13 @@ const Voice = {
     speechSynthesis.speak(u);
   },
   checkDone() {
-    const busy = this.sources.length || this.queue.length || this.inflight || this.ready.size || this.nextPlay < this.seq ||
+    const busy = this.sources.length || this.cur || this.queue.length || this.inflight || this.ready.size || this.nextPlay < this.seq ||
       ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) ||
       (this.ctx && this.endAt > this.ctx.currentTime + 0.05);
     if (!busy && this.speakingMsg) { this.speakingMsg = null; UI.voicePill(); UI.refreshPlayButtons(); }
   },
   stop() {
-    this.gen++; this.seq = 0; this.nextPlay = 0; this.queue = []; this.ready.clear(); this.endAt = 0;
+    this.gen++; this.seq = 0; this.nextPlay = 0; this.queue = []; this.ready.clear(); this.endAt = 0; this.cur = null;
     this.sources.forEach(s => { try { s.stop(); } catch {} }); this.sources = [];
     this.fbTimers.forEach(clearTimeout); this.fbTimers = [];
     if ('speechSynthesis' in window) speechSynthesis.cancel();
